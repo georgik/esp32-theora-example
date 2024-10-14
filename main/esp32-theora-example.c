@@ -12,6 +12,22 @@
 #include <theora/theoradec.h>
 #include "filesystem.h"
 
+/* Helper function to read data into ogg_sync_state */
+int buffer_data(FILE *in, ogg_sync_state *oy) {
+    char *buffer = ogg_sync_buffer(oy, 4096);
+    int bytes = fread(buffer, 1, 4096, in);
+    ogg_sync_wrote(oy, bytes);
+    return bytes;
+}
+
+/* Helper function to queue pages into the appropriate stream */
+static int queue_page(ogg_page *page, ogg_stream_state *to, int theora_p) {
+    if (theora_p && ogg_page_serialno(page) == to->serialno) {
+        ogg_stream_pagein(to, page);
+    }
+    return 0;
+}
+
 void *sdl_thread(void *args) {
     printf("SDL3 Theora Video Playback Example\n");
 
@@ -50,7 +66,7 @@ void *sdl_thread(void *args) {
 
     ogg_sync_state   oy;
     ogg_page         og;
-    ogg_stream_state vo;  // Initialize without copying
+    ogg_stream_state to;  // Theora stream state
     ogg_packet       op;
 
     th_info          ti;
@@ -59,112 +75,79 @@ void *sdl_thread(void *args) {
     th_dec_ctx      *td = NULL;
 
     int             theora_p = 0;
-    int             theora_serialno = -1;
+    int             stateflag = 0;
 
     ogg_sync_init(&oy);
     th_info_init(&ti);
     th_comment_init(&tc);
 
-    // Read headers
-    int headers_read = 0;
-    int done = 0;
-
-    while (!done) {
-        // Read data from file into ogg_sync_state
-        char *buffer = ogg_sync_buffer(&oy, 4096);
-        int bytes = fread(buffer, 1, 4096, videoFile);
-        ogg_sync_wrote(&oy, bytes);
-
-        printf("Read %d bytes into Ogg sync buffer.\n", bytes);
-
-        if (bytes == 0 && ogg_sync_pageout(&oy, &og) <= 0) {
-            printf("End of file reached before finding all Theora headers.\n");
+    /* Ogg file open; parse the headers */
+    /* Only interested in Theora streams */
+    while (!stateflag) {
+        int ret = buffer_data(videoFile, &oy);
+        if (ret == 0) {
+            printf("End of file while searching for codec headers.\n");
             return NULL;
         }
-
-        // Extract pages from ogg_sync_state
         while (ogg_sync_pageout(&oy, &og) > 0) {
-            printf("Extracted page from Ogg sync buffer. Serial no: %d\n", ogg_page_serialno(&og));
+            ogg_stream_state test;
 
-            if (ogg_page_bos(&og)) {
-                printf("Found BOS (Beginning of Stream) page.\n");
+            /* Is this a mandated initial header? If not, stop parsing */
+            if (!ogg_page_bos(&og)) {
+                /* Don't leak the page; get it into the appropriate stream */
+                queue_page(&og, &to, theora_p);
+                stateflag = 1;
+                break;
+            }
 
-                ogg_stream_state test;
-                ogg_stream_init(&test, ogg_page_serialno(&og));
-                ogg_stream_pagein(&test, &og);
+            ogg_stream_init(&test, ogg_page_serialno(&og));
+            ogg_stream_pagein(&test, &og);
+            ogg_stream_packetout(&test, &op);
 
-                // Extract packets from test stream
-                while (ogg_stream_packetout(&test, &op) > 0) {
-                    int ret = th_decode_headerin(&ti, &tc, &ts, &op);
-                    if (ret >= 0) {
-                        // Identified Theora stream
-                        printf("Identified Theora stream with serial no: %d\n", ogg_page_serialno(&og));
-                        theora_p = 1;
-                        theora_serialno = ogg_page_serialno(&og);
-
-                        // Initialize main Theora stream state
-                        ogg_stream_init(&vo, theora_serialno);
-                        ogg_stream_pagein(&vo, &og);
-
-                        headers_read++;
-
-                        // Read the rest of the Theora headers
-                        while (headers_read < 3) {
-                            // Attempt to extract packet
-                            if (ogg_stream_packetout(&vo, &op) > 0) {
-                                ret = th_decode_headerin(&ti, &tc, &ts, &op);
-                                if (ret < 0) {
-                                    printf("Error parsing Theora header packet %d; ret=%d\n", headers_read + 1, ret);
-                                    return NULL;
-                                }
-                                printf("Parsed Theora header packet %d.\n", headers_read + 1);
-                                headers_read++;
-                            } else {
-                                // Need more data
-                                break;
-                            }
-                        }
-
-                        if (headers_read == 3) {
-                            printf("All Theora headers parsed successfully.\n");
-                            done = 1;
-                        }
-                        ogg_stream_clear(&test);
-                        break;
-                    } else {
-                        // Not a Theora stream
-                        printf("Stream is not Theora; ret = %d. Clearing test stream.\n", ret);
-                        ogg_stream_clear(&test);
-                        break;
-                    }
-                }
+            /* Identify the codec: try Theora */
+            if (!theora_p && th_decode_headerin(&ti, &tc, &ts, &op) >= 0) {
+                /* It is Theora */
+                memcpy(&to, &test, sizeof(test));
+                theora_p = 1;
             } else {
-                // Non-BOS page
-                if (theora_p && ogg_page_serialno(&og) == theora_serialno) {
-                    ogg_stream_pagein(&vo, &og);
-
-                    // Read headers
-                    while (headers_read < 3 && ogg_stream_packetout(&vo, &op) > 0) {
-                        int ret = th_decode_headerin(&ti, &tc, &ts, &op);
-                        if (ret < 0) {
-                            printf("Error parsing Theora header packet %d; ret=%d\n", headers_read + 1, ret);
-                            return NULL;
-                        }
-                        printf("Parsed Theora header packet %d.\n", headers_read + 1);
-                        headers_read++;
-                        if (headers_read == 3) {
-                            printf("All Theora headers parsed successfully.\n");
-                            done = 1;
-                        }
-                    }
-                } else {
-                    // Ignore pages from other streams
-                    printf("Ignoring page from another stream with serial no: %d\n", ogg_page_serialno(&og));
-                }
+                /* Whatever it is, we don't care about it */
+                ogg_stream_clear(&test);
             }
         }
     }
 
+    /* We're expecting more header packets. */
+    while (theora_p && theora_p < 3) {
+        int ret;
+
+        /* Look for further Theora headers */
+        while (theora_p && (theora_p < 3) && (ret = ogg_stream_packetout(&to, &op))) {
+            if (ret < 0) {
+                fprintf(stderr, "Error parsing Theora stream headers; corrupt stream?\n");
+                return NULL;
+            }
+            if (!th_decode_headerin(&ti, &tc, &ts, &op)) {
+                fprintf(stderr, "Error parsing Theora stream headers; corrupt stream?\n");
+                return NULL;
+            }
+            theora_p++;
+        }
+
+        /* The header pages/packets will arrive before anything else we
+           care about, or the stream is not obeying spec */
+
+        if (ogg_sync_pageout(&oy, &og) > 0) {
+            queue_page(&og, &to, theora_p); /* Demux into the appropriate stream */
+        } else {
+            int ret = buffer_data(videoFile, &oy); /* Someone needs more data */
+            if (ret == 0) {
+                fprintf(stderr, "End of file while searching for codec headers.\n");
+                return NULL;
+            }
+        }
+    }
+
+    /* And now we have it all. Initialize decoder */
     if (theora_p) {
         td = th_decode_alloc(&ti, ts);
         printf("Theora stream is %lux%lu\n", (unsigned long)ti.pic_width, (unsigned long)ti.pic_height);
@@ -194,7 +177,6 @@ void *sdl_thread(void *args) {
     int y_shift = (ti.pixel_fmt == TH_PF_420) ? 1 : 0;
 
     // Main decoding loop
-    int ret;
     SDL_Event event;
     int quit = 0;
     int eos = 0;
@@ -208,11 +190,8 @@ void *sdl_thread(void *args) {
         }
 
         // Read data from file into ogg_sync_state
-        char *buffer = ogg_sync_buffer(&oy, 4096);
-        int bytes = fread(buffer, 1, 4096, videoFile);
-        ogg_sync_wrote(&oy, bytes);
-
-        if (bytes == 0) {
+        int ret = buffer_data(videoFile, &oy);
+        if (ret == 0) {
             // End of file
             eos = 1;
         }
@@ -220,11 +199,11 @@ void *sdl_thread(void *args) {
         // Extract all available pages from ogg_sync_state
         while (ogg_sync_pageout(&oy, &og) > 0) {
             // Check if this page is for the Theora stream
-            if (ogg_page_serialno(&og) == theora_serialno) {
-                ogg_stream_pagein(&vo, &og);
+            if (ogg_page_serialno(&og) == to.serialno) {
+                ogg_stream_pagein(&to, &og);
 
                 // Extract all available packets from the stream
-                while (ogg_stream_packetout(&vo, &op) > 0) {
+                while (ogg_stream_packetout(&to, &op) > 0) {
                     // Feed packet into decoder
                     if (th_decode_packetin(td, &op, NULL) == 0) {
                         // Got a decoded frame
@@ -234,7 +213,7 @@ void *sdl_thread(void *args) {
                         // Lock texture for updating
                         void *pixels;
                         int pitch;
-                        if (SDL_LockTexture(texture, NULL, &pixels, &pitch) != 0) {
+                        if (!SDL_LockTexture(texture, NULL, &pixels, &pitch)) {
                             printf("Failed to lock texture: %s\n", SDL_GetError());
                             continue;
                         }
@@ -280,7 +259,8 @@ void *sdl_thread(void *args) {
                     }
                 }
             } else {
-                printf("Skipping page...\n");
+                // Ignore pages from other streams
+                printf("Ignoring page from another stream with serial no: %d\n", ogg_page_serialno(&og));
             }
 
             if (ogg_page_eos(&og)) {
@@ -292,9 +272,10 @@ void *sdl_thread(void *args) {
         int delay = (int)(1000.0 * ti.fps_denominator / ti.fps_numerator);
         vTaskDelay(pdMS_TO_TICKS(delay));
     }
+
     // Clean up
     th_decode_free(td);
-    ogg_stream_clear(&vo);
+    ogg_stream_clear(&to);
     ogg_sync_clear(&oy);
     th_info_clear(&ti);
     th_comment_clear(&tc);
