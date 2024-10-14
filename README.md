@@ -1,6 +1,6 @@
 # Example of Theora video player with SDL3 for ESP32
 
-![Test Status](https://github.com/georgik/esp32-theora-test/actions/workflows/test.yml/badge.svg)
+![Test Status](https://github.com/georgik/esp32-theora-example/actions/workflows/test.yml/badge.svg)
 
 ## On-line Demo Simulation
 
