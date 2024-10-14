@@ -2,6 +2,11 @@
 
 ![Test Status](https://github.com/georgik/esp32-theora-test/actions/workflows/test.yml/badge.svg)
 
+## On-line Demo Simulation
+
+[![ESP32-P4 Theora Simulation](docs/img/esp32-theora-sdl3.webp)](https://wokwi.com/experimental/viewer?diagram=https%3A%2F%2Fraw.githubusercontent.com%2Fgeorgik%2Fesp32-theora-example%2Fmain%2Fboards%2Fesp-box%2Fdiagram.json&firmware=https%3A%2F%2Fgithub.com%2Fgeorgik%2Fesp32-theora-example%2Freleases%2Fdownload%2Fv1.0.0%2Fesp32-theora-example-esp-box.bin)
+
+[Run the ESP32-P4 simulation with Wokwi.com](https://wokwi.com/experimental/viewer?diagram=https%3A%2F%2Fraw.githubusercontent.com%2Fgeorgik%2Fesp32-theora-example%2Fmain%2Fboards%2Fesp-box%2Fdiagram.json&firmware=https%3A%2F%2Fgithub.com%2Fgeorgik%2Fesp32-theora-example%2Freleases%2Fdownload%2Fv1.0.0%2Fesp32-theora-example-esp-box.bin)
 
 ## Requirements
 
