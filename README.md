@@ -42,3 +42,10 @@ idf.py @boards/esp32_p4_function_ev_board.cfg build
 ```shell
 idf.py @boards/m5stack_core_s3.cfg build
 ```
+
+
+## Conversion of video to OGV
+
+```shell
+ffmpeg -i input.mp4 -s 320x200 -r 15 -c:v libtheora -q:v 1 -an assets/video.ogv
+```
